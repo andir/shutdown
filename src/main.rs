@@ -9,21 +9,65 @@ mod mqtt;
 
 use mqtt::OpCode;
 
+#[derive(Clone)]
+struct ShutdownMessage {
+    topic: String,
+    value: String,
+}
+
+impl ShutdownMessage {
+    fn new(topic: &str, value: &str) -> Self {
+        Self {
+            topic: topic.to_string(),
+            value: value.to_string(),
+        }
+    }
+}
+
 struct AutoShutdown {
     interrupter: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     door_topic: String,
     delay: std::time::Duration,
     sender: futures::sync::mpsc::Sender<OpCode>,
+    shutdown_messages: Vec<ShutdownMessage>,
 }
 
 impl AutoShutdown {
-    fn new(topic: &str, delay: std::time::Duration, sender: futures::sync::mpsc::Sender<OpCode>) -> Self {
+    fn new(
+        topic: &str,
+        delay: std::time::Duration,
+        sender: futures::sync::mpsc::Sender<OpCode>,
+        shutdown_messages: Vec<ShutdownMessage>,
+    ) -> Self {
         AutoShutdown {
             interrupter: Arc::new(Mutex::new(None)),
             door_topic: topic.to_string(),
             delay,
             sender,
+            shutdown_messages,
         }
+    }
+
+    fn shutdown_futures(&self) -> Box<impl Future<Item = (), Error = ()>> {
+        let one_future = |msg: ShutdownMessage| {
+            let sender = self.sender.clone();
+            sender
+                .send(OpCode::Publish((msg.topic, msg.value)))
+                .map(|_| ())
+                .map_err(|_| ())
+                .then(|_| Ok(()))
+        };
+
+        Box::new(
+            futures::future::join_all(
+                self.shutdown_messages
+                    .iter()
+                    .cloned()
+                    .map(one_future)
+                    .collect::<Vec<_>>(),
+            )
+            .map(|_| ()),
+        )
     }
 
     fn handle_msg(&self, msg: mqtt::OpCode) {
@@ -53,18 +97,17 @@ impl AutoShutdown {
                             let (sender, receiver) = oneshot::channel();
                             *it = Some(sender);
 
+                            let futs = self.shutdown_futures();
+
                             let it_clone = Arc::clone(&self.interrupter);
-                            let sender = self.sender.clone();
                             let d =
                                 tokio::timer::Delay::new(std::time::Instant::now() + self.delay)
+                                    .map_err(|_| ())
                                     .and_then(move |_| {
                                         let mut it = it_clone.lock().expect("Mutex poisoned");
                                         println!("timer expired");
                                         *it = None;
-                                        sender.send(OpCode::Publish(("/foo".to_string(), "bar".to_string())))
-                                            .map(|_| ())
-                                            .map_err(|_| ())
-                                            .then(|_| Ok(()))
+                                        futs
                                     })
                                     .map_err(|_| ());
 
@@ -89,19 +132,20 @@ impl AutoShutdown {
 fn main() {
     let door_topic = "w17/doorfake/lock/state";
     let delay = std::time::Duration::from_millis(1000);
-
-
     let ((tx, rx), m) = mqtt::MqttConnection::new();
 
-    let auto_shutdown = AutoShutdown::new(door_topic, delay, tx.clone());
+    let shutdown_messages = vec![
+        ShutdownMessage::new("/foo", "bar")
+    ];
 
+    let auto_shutdown = AutoShutdown::new(door_topic, delay, tx.clone(), shutdown_messages);
     std::thread::spawn(|| {
         println!("connecting!");
         m.run("mqtt.w17.io", 1883).unwrap();
     });
 
     let fut = tx
-        .send(mqtt::OpCode::Subscribe("#".to_string()))
+        .send(mqtt::OpCode::Subscribe(door_topic.to_string()))
         .map_err(|e| println!("error: {}", e))
         .map(|_| ())
         .and_then(move |_| {

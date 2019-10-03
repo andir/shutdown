@@ -8,20 +8,21 @@ use futures::sync::mpsc::{
     SendError,
     Sender,
 };
-use mosquitto_client::{MosqMessage, Mosquitto};
 use tokio::prelude::*;
+
+use rumqtt::{MqttClient, MqttOptions, Notification, ReconnectOptions};
 
 #[derive(Debug)]
 pub enum Error {
     SendingFailed(SendError<OpCode>),
     //    ReceivingFailed(RecvError),
-    MosquittoError(mosquitto_client::Error),
+    MosquittoConnectError(rumqtt::error::ConnectError),
     ThreadJoinError,
 }
 
-impl From<mosquitto_client::Error> for Error {
-    fn from(e: mosquitto_client::Error) -> Self {
-        Error::MosquittoError(e)
+impl From<rumqtt::error::ConnectError> for Error {
+    fn from(e: rumqtt::error::ConnectError) -> Self {
+        Error::MosquittoConnectError(e)
     }
 }
 
@@ -58,43 +59,31 @@ impl MqttConnection {
         ((outer_sender, outer_receiver), m)
     }
 
-    pub fn run(self, broker: &str, port: u32) -> Result<()> {
-        let m = Mosquitto::new("space-shutdown");
-        m.connect(broker, port)?;
-        println!("connected!");
+    pub fn run(self, broker: &str, port: u16) -> Result<()> {
+        let reconnect_options = ReconnectOptions::Always(5);
+        let mqtt_options = MqttOptions::new("space-shutdown", broker, port)
+            .set_keep_alive(10)
+            .set_reconnect_opts(reconnect_options)
+            .set_clean_session(false);
 
-        let mut mc = m.callbacks(self.event_emitter);
-        mc.on_message(|tx, msg| {
-            //            println!("msg: {}={:?}", msg.topic(), msg.payload());
-            let payload = match std::str::from_utf8(msg.payload()) {
-                Ok(v) => v,
-                Err(e) => {
-                    println!("failed to decode utf8 from payload: {}", e);
-                    return;
-                }
-            };
-
-            let topic = msg.topic();
-            let tx = tx.clone();
-            let fut = tx
-                .send(OpCode::MessageReceived((
-                    topic.to_string(),
-                    payload.to_string(),
-                )))
-                .map(|_| ())
-                .map_err(|_| ());
-            tokio::run(futures::lazy(move || fut));
-        });
+        let (mut mqtt_client, notifications) = MqttClient::start(mqtt_options)?;
 
         let rx = self.event_receiver;
-        let mt = m.clone();
+        let mut loop_client = mqtt_client.clone();
         let ht = std::thread::spawn(move || {
             tokio::run(rx.for_each(move |msg| {
                 match msg {
                     OpCode::Subscribe(topic) => {
                         println!("subscribing: {}", topic);
-                        mt.subscribe(&topic, 0).expect("Failed to subscribe");
+                        loop_client
+                            .subscribe(&topic, mqtt311::QoS::AtLeastOnce)
+                            .expect("Failed to subscribe");
                         println!("subscribed");
+                    }
+                    OpCode::Publish((topic, value)) => {
+                        loop_client
+                            .publish(topic, mqtt311::QoS::AtLeastOnce, false, value.as_bytes())
+                            .expect("failed to publish");
                     }
                     e => println!("Unimplemented event received: {:?}", e),
                 };
@@ -102,14 +91,34 @@ impl MqttConnection {
             }))
         });
 
-        let mt = m.clone();
-        let jh = std::thread::spawn(move || {
-            mt.loop_until_disconnect(200)
-                .expect("Failed to run loop until disconnect");
-            println!("MQTT loop disconnected");
-        });
+        for notification in notifications {
+            match notification {
+                Notification::Publish(msg) => {
+                    println!("Publish: {:?}", msg);
+                    let payload = match std::str::from_utf8(&msg.payload) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            println!("failed to decode utf8 from payload: {}", e);
+                            continue;
+                        }
+                    };
 
-        jh.join().map_err(|_e| Error::ThreadJoinError)?;
+                    let fut = self
+                        .event_emitter
+                        .clone()
+                        .send(OpCode::MessageReceived((
+                            msg.topic_name,
+                            payload.to_string(),
+                        )))
+                        .map(|_| ())
+                        .map_err(|_| ());
+                    tokio::run(futures::lazy(move || fut));
+                }
+                o => {
+                    println!("Unhandled notification: {:?}", o);
+                }
+            }
+        }
         ht.join().map_err(|_e| Error::ThreadJoinError)?;
 
         Ok(())
