@@ -4,18 +4,13 @@ use futures::stream::Stream;
 use futures::sync::mpsc::{
     channel,
     Receiver,
-    //RecvError,
-    SendError,
     Sender,
 };
-use tokio::prelude::*;
 
 use rumqtt::{MqttClient, MqttOptions, Notification, ReconnectOptions};
 
 #[derive(Debug)]
 pub enum Error {
-    SendingFailed(SendError<OpCode>),
-    //    ReceivingFailed(RecvError),
     MosquittoConnectError(rumqtt::error::ConnectError),
     ThreadJoinError,
 }
@@ -35,10 +30,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub enum OpCode {
     MessageReceived((Topic, Value)),
     Subscribe(Topic),
-    Unsubscribe(Topic),
     Publish((Topic, Value)),
-    Shutdown,
-    ShutdownComplete,
 }
 
 pub struct MqttConnection {
@@ -66,7 +58,7 @@ impl MqttConnection {
             .set_reconnect_opts(reconnect_options)
             .set_clean_session(false);
 
-        let (mut mqtt_client, notifications) = MqttClient::start(mqtt_options)?;
+        let (mqtt_client, notifications) = MqttClient::start(mqtt_options)?;
 
         let rx = self.event_receiver;
         let mut loop_client = mqtt_client.clone();

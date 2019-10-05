@@ -131,11 +131,19 @@ impl AutoShutdown {
 
 fn main() {
     let door_topic = "w17/doorfake/lock/state";
-    let delay = std::time::Duration::from_millis(1000);
+    let delay = std::time::Duration::from_millis(1_000 * 60);
     let ((tx, rx), m) = mqtt::MqttConnection::new();
 
     let shutdown_messages = vec![
-        ShutdownMessage::new("/foo", "bar")
+        ShutdownMessage::new("w17/kitchen/bear/set", "0"),
+        ShutdownMessage::new("w17/kitchen/amp/set", "0"),
+        ShutdownMessage::new("w17/kitchen/tv/power/set", "0"),
+        ShutdownMessage::new("w17/lounge/amp/set", "0"),
+        ShutdownMessage::new("w17/lounge/video/set", "0"),
+        ShutdownMessage::new("w17/lounge/printer/set", "0"),
+        ShutdownMessage::new("w17/lounge/leds/3dprinter/set", "0"),
+        ShutdownMessage::new("w17/lounge/leds/auditorium/set", "0"),
+        ShutdownMessage::new("w17/lounge/leds/beamer/set", "0"),
     ];
 
     let auto_shutdown = AutoShutdown::new(door_topic, delay, tx.clone(), shutdown_messages);
