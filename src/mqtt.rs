@@ -1,11 +1,7 @@
 use futures::future::Future;
 use futures::sink::Sink;
 use futures::stream::Stream;
-use futures::sync::mpsc::{
-    channel,
-    Receiver,
-    Sender,
-};
+use futures::sync::mpsc::{channel, Receiver, Sender};
 
 use rumqtt::{MqttClient, MqttOptions, Notification, ReconnectOptions};
 
@@ -53,7 +49,7 @@ impl MqttConnection {
 
     pub fn run(self, broker: &str, port: u16) -> Result<()> {
         let reconnect_options = ReconnectOptions::Always(5);
-        let mqtt_options = MqttOptions::new("space-shutdown", broker, port)
+        let mqtt_options = MqttOptions::new("space-shutdown-dev", broker, port)
             .set_keep_alive(10)
             .set_reconnect_opts(reconnect_options)
             .set_clean_session(false);
