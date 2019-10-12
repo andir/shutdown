@@ -1,4 +1,7 @@
 with import <nixpkgs> {};
 mkShell {
-  buildInputs = [];
+  nativeBuildInputs = [ pkgconfig ];
+  buildInputs = [ libical ];
+
+  LIBCLANG_PATH = "${llvmPackages.libclang}/lib";
 }

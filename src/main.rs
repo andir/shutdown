@@ -10,6 +10,7 @@ use std::sync::*;
 
 mod hass;
 mod mqtt;
+mod calendar;
 
 use mqtt::OpCode;
 
